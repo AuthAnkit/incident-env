@@ -1,3 +1,12 @@
+---
+title: Incident Env
+emoji: 🚨
+colorFrom: red
+colorTo: indigo
+sdk: docker
+app_file: inference.py
+pinned: false
+---
 # IncidentEnv 🚨
 
 **SRE Incident Response Simulator — OpenEnv compliant**
