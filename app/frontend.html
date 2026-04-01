@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IncidentEnv Control Room</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #0f172a; color: #f8fafc; }
+        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        .blink { animation: blinker 1.5s linear infinite; }
+        @keyframes blinker { 50% { opacity: 0; } }
+        /* Scrollbar styles */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #1e293b; }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+    </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden">
+    <!-- Header -->
+    <header class="glass px-6 py-4 flex justify-between items-center border-b border-slate-700">
+        <div class="flex items-center gap-3">
+            <span class="text-red-500 text-2xl blink">🚨</span>
+            <h1 class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-red-400 to-orange-500">
+                IncidentEnv Control Room
+            </h1>
+        </div>
+        <div class="flex items-center gap-4">
+            <select id="taskSelect" class="bg-slate-800 border border-slate-600 text-sm rounded-md px-3 py-2 text-white outline-none">
+                <option value="task_easy">Easy: Redis OOM</option>
+                <option value="task_medium">Medium: DB Exhaustion</option>
+                <option value="task_hard">Hard: Auth Memory Leak</option>
+                <option value="task_real_cpu">Real Chaos: CPU Spike</option>
+            </select>
+            <button onclick="resetEnvironment()" class="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-md font-medium transition-colors text-sm">
+                Reset Incident
+            </button>
+            <button onclick="runBaseline()" class="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-md font-medium transition-colors text-sm">
+                Run AI Baseline
+            </button>
+            <div id="statusBadge" class="bg-green-500/20 text-green-400 border border-green-500/30 px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider">
+                System Normal
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Grid -->
+    <main class="flex-1 grid grid-cols-12 gap-4 p-4 min-h-0">
+        
+        <!-- Left Column: Metrics & Alerts -->
+        <div class="col-span-12 lg:col-span-8 flex flex-col gap-4 min-h-0">
+            <!-- Active Alerts -->
+            <div class="glass rounded-xl p-5 flex flex-col max-h-[30%]">
+                <h2 class="text-lg font-semibold text-slate-200 mb-3 flex items-center gap-2">
+                    <svg class="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                    Active Alerts
+                </h2>
+                <div id="alertsContainer" class="flex-1 overflow-y-auto flex flex-col gap-2">
+                    <div class="text-slate-500 text-sm italic">Loading alerts...</div>
+                </div>
+            </div>
+
+            <!-- Service Metrics -->
+            <div class="glass rounded-xl p-5 flex-1 flex flex-col min-h-0">
+                <h2 class="text-lg font-semibold text-slate-200 mb-4 flex items-center gap-2">
+                    <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                    Live Service Metrics
+                </h2>
+                <div id="metricsContainer" class="grid grid-cols-2 gap-4 overflow-y-auto pr-2 pb-2">
+                    <div class="text-slate-500 text-sm italic">Loading metrics...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Column: Timeline & Actions -->
+        <div class="col-span-12 lg:col-span-4 flex flex-col gap-4 min-h-0">
+            <!-- History / Terminal -->
+            <div class="glass rounded-xl p-5 flex-1 flex flex-col min-h-0">
+                <h2 class="text-lg font-semibold text-slate-200 mb-3">Incident Timeline</h2>
+                <div id="historyContainer" class="flex-1 bg-slate-900 rounded-lg p-3 font-mono text-sm overflow-y-auto border border-slate-700">
+                    <div class="text-slate-500 italic">Waiting for actions...</div>
+                </div>
+            </div>
+
+            <!-- Manual Action Panel -->
+            <div class="glass rounded-xl p-5 shrink-0">
+                <h2 class="text-lg font-semibold text-slate-200 mb-3">Take Action</h2>
+                <div class="flex flex-col gap-3">
+                    <select id="actionType" class="bg-slate-800 text-white text-sm rounded-md px-3 py-2 border border-slate-600 outline-none w-full" onchange="updateToolOptions()">
+                        <option value="run_diagnostic">Run Diagnostic</option>
+                        <option value="apply_fix">Apply Fix</option>
+                        <option value="close_incident">Close Incident</option>
+                    </select>
+                    <select id="toolSelect" class="bg-slate-800 text-white text-sm rounded-md px-3 py-2 border border-slate-600 outline-none w-full">
+                        <!-- Populated dynamically -->
+                    </select>
+                    <button onclick="sendAction()" class="bg-blue-600 hover:bg-blue-500 text-white font-medium py-2 px-4 rounded-md transition-colors w-full">
+                        Execute
+                    </button>
+                    <!-- Small Score Display -->
+                    <div id="scoreDisplay" class="mt-2 text-center text-sm font-semibold text-slate-400">Score: 0.00 | Steps: 0</div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        const API_URL = window.location.origin; // Assume hosted on same port
+        let availableDiagnostics = [];
+        let availableFixes = [];
+        let lastStepCount = -1;
+
+        // Fetch schema on load
+        async function loadSchema() {
+            try {
+                const res = await fetch(`${API_URL}/tasks`);
+                const data = await res.json();
+                availableDiagnostics = data.available_diagnostics;
+                availableFixes = data.available_fixes;
+                updateToolOptions();
+                
+                // Also add tasks to dropdown dynamically if needed, but hardcoding works for now
+            } catch (err) {
+                console.error("Failed to load schema", err);
+            }
+        }
+
+        function updateToolOptions() {
+            const actionType = document.getElementById('actionType').value;
+            const toolSelect = document.getElementById('toolSelect');
+            toolSelect.innerHTML = '';
+            
+            if (actionType === 'close_incident') {
+                toolSelect.disabled = true;
+                return;
+            }
+            toolSelect.disabled = false;
+            
+            const options = actionType === 'run_diagnostic' ? availableDiagnostics : availableFixes;
+            options.forEach(opt => {
+                const el = document.createElement('option');
+                el.value = opt;
+                el.textContent = opt;
+                toolSelect.appendChild(el);
+            });
+        }
+
+        async function resetEnvironment() {
+            const task_id = document.getElementById('taskSelect').value;
+            await fetch(`${API_URL}/reset`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ task_id })
+            });
+            lastStepCount = -1;
+            pollState(); // Force immediate refresh
+        }
+
+        async function sendAction() {
+            const atype = document.getElementById('actionType').value;
+            const tool = document.getElementById('toolSelect').value;
+            
+            const payload = { action_type: atype };
+            if (atype !== 'close_incident') payload.tool = tool;
+
+            await fetch(`${API_URL}/step`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            pollState();
+        }
+        
+        async function runBaseline() {
+            alert('Baseline agent started. Watch the timeline!');
+            fetch(`${API_URL}/baseline`, { method: 'POST' });
+            // The polling will automatically pick up the steps taken by the baseline!
+        }
+
+        async function pollState() {
+            try {
+                const res = await fetch(`${API_URL}/state`);
+                if (!res.ok) return;
+                const state = await res.json();
+                
+                renderState(state);
+            } catch (err) {
+                console.error('Polling error', err);
+            }
+        }
+
+        function renderState(state) {
+            const obs = state.current_observation;
+            if (!obs) return;
+
+            // 1. Update Status Badge
+            const badge = document.getElementById('statusBadge');
+            badge.textContent = obs.incident_status.toUpperCase();
+            if (obs.incident_status === 'resolved') {
+                badge.className = 'bg-green-500/20 text-green-400 border border-green-500/30 px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider';
+            } else if (obs.incident_status === 'open') {
+                badge.className = 'bg-red-500/20 text-red-400 border border-red-500/30 px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider blink';
+            } else {
+                badge.className = 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30 px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider';
+            }
+
+            // 2. Score & Steps
+            fetch(`${API_URL}/grader`, { method: 'POST' })
+                .then(r => r.json())
+                .then(r => {
+                    document.getElementById('scoreDisplay').textContent = `Score: ${(r.score * 100).toFixed(0)}% | Steps: ${state.step_count}/${state.max_steps}`;
+                });
+
+            // 3. Render Alerts
+            const alertsCont = document.getElementById('alertsContainer');
+            if (obs.active_alerts.length === 0) {
+                alertsCont.innerHTML = '<div class="text-green-500 text-sm">No active alerts.</div>';
+            } else {
+                alertsCont.innerHTML = obs.active_alerts.map(a => `
+                    <div class="border-l-4 ${a.severity === 'critical' ? 'border-red-500 bg-red-500/10' : 'border-orange-500 bg-orange-500/10'} p-3 rounded-r-md">
+                        <div class="flex justify-between items-start">
+                            <span class="font-bold text-sm ${a.severity === 'critical' ? 'text-red-400' : 'text-orange-400'}">[${a.service}] ${a.alert_id}</span>
+                            <span class="text-xs text-slate-400">${a.metric}: ${a.value}</span>
+                        </div>
+                        <p class="text-sm mt-1 text-slate-300">${a.message}</p>
+                    </div>
+                `).join('');
+            }
+
+            // 4. Render Metrics
+            const metricsCont = document.getElementById('metricsContainer');
+            metricsCont.innerHTML = Object.entries(obs.service_metrics).map(([name, m]) => `
+                <div class="bg-slate-800/50 border border-slate-700 rounded-lg p-3">
+                    <div class="flex justify-between items-center mb-2">
+                        <span class="font-semibold text-sm ${m.status === 'degraded' ? 'text-orange-400' : 'text-green-400'}">${name}</span>
+                        <span class="text-xs px-2 py-0.5 rounded-full ${m.status === 'degraded' ? 'bg-orange-500/20 text-orange-400' : 'bg-green-500/20 text-green-400'}">${m.status}</span>
+                    </div>
+                    <div class="space-y-2 mt-3">
+                        ${renderBar('CPU', m.cpu_percent, '%')}
+                        ${renderBar('Memory', m.memory_percent, '%')}
+                        <div class="flex justify-between text-xs text-slate-400 mt-2">
+                            <span>Errors: <span class="text-white">${m.error_rate}</span></span>
+                            <span>p99: <span class="text-white">${m.latency_p99_ms}ms</span></span>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+
+            // 5. Render History only if step count increased
+            if (state.step_count > lastStepCount || lastStepCount === -1) {
+                const histCont = document.getElementById('historyContainer');
+                if (obs.incident_history.length === 0) {
+                    histCont.innerHTML = '<div class="text-slate-500 italic">No actions taken yet. Start investigating.</div>';
+                } else {
+                    histCont.innerHTML = obs.incident_history.map(h => `
+                        <div class="mb-3 border-b border-slate-700/50 pb-2 last:border-0 hover:bg-slate-800/30 p-2 rounded">
+                            <div class="flex justify-between text-xs">
+                                <span class="text-blue-400 font-bold">Step ${h.step}: ${h.action_type}</span>
+                                <span class="${h.reward_delta > 0 ? 'text-green-400' : (h.reward_delta < 0 ? 'text-red-400' : 'text-slate-400')}">
+                                    ${h.reward_delta > 0 ? '+' : ''}${h.reward_delta} pts
+                                </span>
+                            </div>
+                            ${h.tool ? `<div class="text-purple-400 text-xs mt-1">>&nbsp;${h.tool}</div>` : ''}
+                            <div class="text-slate-300 text-sm mt-1 whitespace-pre-wrap">${h.feedback}</div>
+                        </div>
+                    `).join('');
+                    // Auto scroll to bottom
+                    histCont.scrollTop = histCont.scrollHeight;
+                }
+                lastStepCount = state.step_count;
+            }
+        }
+
+        function renderBar(label, value, unit) {
+            let color = 'bg-green-500';
+            if (value > 70) color = 'bg-orange-500';
+            if (value > 90) color = 'bg-red-500';
+            
+            return `
+                <div>
+                    <div class="flex justify-between text-xs mb-1">
+                        <span class="text-slate-400">${label}</span>
+                        <span class="text-slate-200">${value}${unit}</span>
+                    </div>
+                    <div class="w-full bg-slate-700 rounded-full h-1.5">
+                        <div class="${color} h-1.5 rounded-full" style="width: ${Math.min(100, value)}%"></div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Initialize
+        loadSchema();
+        resetEnvironment(); // start fresh
+        setInterval(pollState, 1000);
+    </script>
+</body>
+</html>
