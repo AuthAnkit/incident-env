@@ -1,17 +1,14 @@
 """
 inference.py — OpenEnv required entry point.
 
-This file is called by the OpenEnv validator to confirm the environment
-can run a complete episode end-to-end using only the standard
-reset() → step() → grader() loop.
+Uses the OpenAI client (via API_BASE_URL, MODEL_NAME, HF_TOKEN env vars)
+to run an LLM-powered agent against IncidentEnv tasks.
 
-It also serves as the simplest possible example of how to interact with
-IncidentEnv programmatically (no OpenAI key required — uses a rule-based
-heuristic agent).
+Falls back to a deterministic heuristic agent when no API key is available.
 
 Usage
 -----
-  python inference.py                   # runs task_easy with heuristic agent
+  python inference.py                   # runs task_easy
   python inference.py --task task_hard  # runs a specific task
   python inference.py --all-tasks       # runs all three tasks
 """
@@ -19,8 +16,9 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 import os
+import sys
+import time
 
 # ── Allow running from the repo root without installing the package ───────────
 sys.path.insert(0, os.path.dirname(__file__))
@@ -28,10 +26,127 @@ sys.path.insert(0, os.path.dirname(__file__))
 from server.environment import IncidentEnvironment
 from server.models import Action
 
+# ── Environment variables (provided by hackathon evaluators) ──────────────────
+API_BASE_URL = os.environ.get("API_BASE_URL", "")
+MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-4o-mini")
+HF_TOKEN = os.environ.get("HF_TOKEN", "")
 
-# ── Heuristic agent (no API key needed) ──────────────────────────────────────
+# ── Try to initialise OpenAI client ──────────────────────────────────────────
+_client = None
+try:
+    from openai import OpenAI
+    if HF_TOKEN:
+        _client = OpenAI(
+            base_url=API_BASE_URL or "https://api.openai.com/v1",
+            api_key=HF_TOKEN,
+        )
+except ImportError:
+    pass
 
-# Ordered diagnostic strategy: check logs → check service-specific tools → deployments
+
+# ── Structured logging helpers ────────────────────────────────────────────────
+
+def _log(tag: str, data: dict) -> None:
+    """Emit a structured stdout log line in the required [TAG] format."""
+    print(f"[{tag}] {json.dumps(data)}", flush=True)
+
+
+# ── LLM-powered agent ────────────────────────────────────────────────────────
+
+_SYSTEM_PROMPT = """\
+You are an expert SRE incident response agent. You are managing a production incident.
+
+You will receive an observation containing: active alerts, service metrics, logs,
+deployment history, and available tools.
+
+Respond with EXACTLY ONE JSON object (no markdown fences) with these fields:
+  - action_type: one of "run_diagnostic", "apply_fix", "write_postmortem", "close_incident", "escalate", "add_note"
+  - tool: (string) required for run_diagnostic / apply_fix — the name of the diagnostic or fix
+  - postmortem_text: (string) required for write_postmortem — a full markdown postmortem
+  - reasoning: (string) your chain-of-thought explanation
+
+Strategy:
+1. Run diagnostics to gather evidence before applying any fix.
+2. Identify the root cause from diagnostic outputs.
+3. Apply the correct fix (not a guess — only after confirming root cause).
+4. For hard tasks, write a comprehensive postmortem covering: root cause, timeline, impact, remediation, prevention, follow-up action items.
+5. Close the incident once resolved.
+"""
+
+
+def _observation_to_text(obs) -> str:
+    """Convert an Observation to a concise text summary for the LLM."""
+    parts = []
+    parts.append(f"Task: {obs.task_id} | Step: {obs.step_number}/{obs.max_steps} | Status: {obs.incident_status}")
+    parts.append(f"\n--- Active Alerts ({len(obs.active_alerts)}) ---")
+    for a in obs.active_alerts:
+        parts.append(f"  [{a.severity.upper()}] {a.service}: {a.message}")
+    parts.append(f"\n--- Service Metrics ---")
+    for name, m in obs.service_metrics.items():
+        parts.append(f"  {name}: CPU={m.cpu_percent}% Mem={m.memory_percent}% Err={m.error_rate}/s Lat_p99={m.latency_p99_ms}ms Status={m.status}")
+    parts.append(f"\n--- Recent Logs ---")
+    for lg in obs.recent_logs[-6:]:
+        parts.append(f"  [{lg.level}] {lg.service}: {lg.message[:120]}")
+    if obs.recent_deployments:
+        parts.append(f"\n--- Recent Deployments ---")
+        for d in obs.recent_deployments:
+            parts.append(f"  {d.service} {d.version} (was {d.previous_version}) by {d.author}: {d.changelog[:100]}")
+    if obs.incident_history:
+        parts.append(f"\n--- Actions Taken So Far ---")
+        for h in obs.incident_history[-5:]:
+            parts.append(f"  Step {h.step}: {h.action_type} {h.tool or ''} → {h.feedback[:80]}")
+    parts.append(f"\n--- Available Diagnostics: {', '.join(obs.available_diagnostics)}")
+    parts.append(f"--- Available Fixes: {', '.join(obs.available_fixes)}")
+    return "\n".join(parts)
+
+
+def _parse_llm_action(text: str) -> Action:
+    """Parse the LLM JSON response into an Action, with fallback."""
+    text = text.strip()
+    # Strip markdown fences if present
+    if text.startswith("```"):
+        text = text.split("\n", 1)[-1]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+    data = json.loads(text)
+    return Action(
+        action_type=data.get("action_type", "add_note"),
+        tool=data.get("tool"),
+        target_service=data.get("target_service"),
+        postmortem_text=data.get("postmortem_text"),
+        note=data.get("note"),
+        reasoning=data.get("reasoning", ""),
+    )
+
+
+def _llm_decide(obs, history_msgs: list) -> tuple[Action, list]:
+    """Ask the LLM for the next action. Returns (Action, updated_messages)."""
+    obs_text = _observation_to_text(obs)
+    history_msgs.append({"role": "user", "content": obs_text})
+
+    response = _client.chat.completions.create(
+        model=MODEL_NAME,
+        messages=[{"role": "system", "content": _SYSTEM_PROMPT}] + history_msgs,
+        temperature=0.2,
+        max_tokens=1024,
+    )
+    reply = response.choices[0].message.content
+    history_msgs.append({"role": "assistant", "content": reply})
+
+    try:
+        action = _parse_llm_action(reply)
+    except (json.JSONDecodeError, KeyError):
+        action = Action(
+            action_type="add_note",
+            note=f"LLM response parse error: {reply[:200]}",
+            reasoning="Failed to parse LLM response, adding note instead.",
+        )
+    return action, history_msgs
+
+
+# ── Heuristic agent (fallback when no API key) ──────────────────────────────
+
 _DIAGNOSTIC_SEQUENCE = [
     "check_service_logs",
     "check_redis_memory",
@@ -49,12 +164,11 @@ _DIAGNOSTIC_SEQUENCE = [
     "check_config_changes",
 ]
 
-# Map discovered root causes → correct fix
 _FIX_MAP = {
-    "redis_oom":                      "increase_redis_memory",
-    "db_connection_pool_exhausted":   "kill_long_running_query",
-    "auth_memory_leak":               "rollback_auth_service",
-    "real_world_cpu_stress":          "scale_up_api_gateway",
+    "redis_oom":                    "increase_redis_memory",
+    "db_connection_pool_exhausted": "kill_long_running_query",
+    "auth_memory_leak":            "rollback_auth_service",
+    "real_world_cpu_stress":       "scale_up_api_gateway",
 }
 
 _POSTMORTEM_TEMPLATE = """\
@@ -89,124 +203,139 @@ within the expected SLA window after remediation.
 """
 
 
-def run_heuristic_episode(task_id: str, verbose: bool = True) -> dict:
+def _heuristic_decide(state, diag_queue: list, postmortem_written: bool, task_id: str) -> tuple[Action, bool]:
+    """Deterministic heuristic agent. Returns (Action, postmortem_written)."""
+    scenario_needs_pm = (task_id == "task_hard")
+
+    if (
+        scenario_needs_pm
+        and state.root_cause_identified
+        and state.fixes_applied
+        and not postmortem_written
+    ):
+        return Action(
+            action_type="write_postmortem",
+            postmortem_text=_POSTMORTEM_TEMPLATE,
+            reasoning="Root cause confirmed and fix applied. Writing postmortem to complete task_hard requirements.",
+        ), True
+
+    if state.root_cause_identified and not any(
+        f in state.fixes_applied for f in _FIX_MAP.values()
+    ):
+        fix = _FIX_MAP.get(
+            next((d for d in state.agent_discoveries if d in _FIX_MAP), ""),
+            None,
+        )
+        if fix:
+            return Action(
+                action_type="apply_fix",
+                tool=fix,
+                reasoning=f"Root cause identified. Applying correct fix '{fix}'.",
+            ), postmortem_written
+
+    if state.incident_resolved:
+        return Action(
+            action_type="close_incident",
+            reasoning="Incident resolved. Closing.",
+        ), postmortem_written
+
+    if diag_queue:
+        tool = diag_queue.pop(0)
+        while tool in state.diagnostics_run and diag_queue:
+            tool = diag_queue.pop(0)
+        return Action(
+            action_type="run_diagnostic",
+            tool=tool,
+            reasoning=f"Systematic investigation: running '{tool}' to gather evidence.",
+        ), postmortem_written
+
+    return Action(
+        action_type="escalate",
+        reasoning="All diagnostics exhausted. Escalating.",
+    ), postmortem_written
+
+
+# ── Episode runner ────────────────────────────────────────────────────────────
+
+def run_episode(task_id: str) -> dict:
     """
-    Run one episode with a deterministic heuristic agent.
-    No API key required. Returns the final grader result dict.
+    Run one full episode against a task. Uses LLM if available, heuristic otherwise.
+    Emits structured [START], [STEP], [END] logs to stdout.
     """
+    use_llm = _client is not None
+    agent_name = f"llm ({MODEL_NAME})" if use_llm else "heuristic (rule-based)"
+
     env = IncidentEnvironment()
     obs = env.reset(task_id)
 
-    if verbose:
-        print(f"\n{'─'*60}")
-        print(f"  Task : {task_id}")
-        print(f"  Agent: heuristic (rule-based, no API key needed)")
-        print(f"{'─'*60}")
+    _log("START", {
+        "task_id": task_id,
+        "model": MODEL_NAME if use_llm else "heuristic",
+        "agent": agent_name,
+        "max_steps": obs.max_steps,
+        "timestamp": time.time(),
+    })
 
-    diag_queue = list(_DIAGNOSTIC_SEQUENCE)
     step = 0
     done = False
+    diag_queue = list(_DIAGNOSTIC_SEQUENCE)
     postmortem_written = False
+    llm_messages: list = []
 
     while not done:
         step += 1
         state = env.state()
 
-        # 1. Write postmortem if needed and not yet done
-        scenario_needs_pm = (task_id == "task_hard")
-        if (
-            scenario_needs_pm
-            and state.root_cause_identified
-            and state.fixes_applied
-            and not postmortem_written
-        ):
-            action = Action(
-                action_type="write_postmortem",
-                postmortem_text=_POSTMORTEM_TEMPLATE,
-                reasoning="Root cause confirmed and fix applied. Writing postmortem to complete task_hard requirements.",
-            )
-            postmortem_written = True
-
-        # 2. Apply fix if root cause known and no correct fix applied yet
-        elif state.root_cause_identified and not any(
-            f in state.fixes_applied
-            for f in _FIX_MAP.values()
-        ):
-            fix = _FIX_MAP.get(
-                next((d for d in state.agent_discoveries if d in _FIX_MAP), ""),
-                None,
-            )
-            if fix:
-                action = Action(
-                    action_type="apply_fix",
-                    tool=fix,
-                    reasoning=f"Root cause identified as '{state.agent_discoveries[-1]}'. Applying correct fix '{fix}'.",
+        if use_llm:
+            try:
+                action, llm_messages = _llm_decide(obs, llm_messages)
+            except Exception as e:
+                # Fallback to heuristic on LLM error
+                action, postmortem_written = _heuristic_decide(
+                    state, diag_queue, postmortem_written, task_id
                 )
-            else:
-                action = Action(
-                    action_type="add_note",
-                    note="Root cause identified but fix mapping not found — escalating.",
-                    reasoning="No fix mapping available for discovered root cause.",
-                )
-
-        # 3. Close if resolved
-        elif state.incident_resolved:
-            action = Action(
-                action_type="close_incident",
-                reasoning="Incident resolved. Closing.",
-            )
-
-        # 4. Run next diagnostic
-        elif diag_queue:
-            tool = diag_queue.pop(0)
-            # Skip already-run diagnostics
-            while tool in state.diagnostics_run and diag_queue:
-                tool = diag_queue.pop(0)
-            action = Action(
-                action_type="run_diagnostic",
-                tool=tool,
-                reasoning=f"Systematic investigation: running '{tool}' to gather evidence before applying any fix.",
-            )
-
-        # 5. Escalate as last resort
         else:
-            action = Action(
-                action_type="escalate",
-                reasoning="All diagnostics exhausted without identifying root cause. Escalating to senior on-call.",
+            action, postmortem_written = _heuristic_decide(
+                state, diag_queue, postmortem_written, task_id
             )
 
         result = env.step(action)
+        obs = result.observation
         done = result.done
 
-        if verbose:
-            atype  = action.action_type
-            tool   = action.tool or action.action_type
-            reward = result.reward
-            fb     = result.info.get("feedback", "")[:80]
-            rq     = result.info.get("reasoning_quality", "")
-            print(
-                f"  Step {step:2d}  {atype:20s}  {tool:30s}  "
-                f"r={reward:.3f}  rq={rq}"
-            )
-            if fb:
-                print(f"         ↳ {fb}")
+        _log("STEP", {
+            "step": step,
+            "task_id": task_id,
+            "action_type": action.action_type,
+            "tool": action.tool or "",
+            "reward": result.reward,
+            "done": done,
+            "feedback": result.info.get("feedback", "")[:120],
+            "reasoning": (action.reasoning or "")[:120],
+            "timestamp": time.time(),
+        })
 
     # Final grade
     score, breakdown = env.grade_episode()
 
-    if verbose:
-        print(f"\n  Final score : {score:.3f}")
-        for k, v in breakdown.items():
-            bar = "█" * round(v * 20) + "░" * (20 - round(v * 20))
-            print(f"    {k:35s}: {v:.3f}  {bar}")
+    _log("END", {
+        "task_id": task_id,
+        "score": score,
+        "breakdown": breakdown,
+        "steps": step,
+        "root_cause_identified": env.state().root_cause_identified,
+        "incident_resolved": env.state().incident_resolved,
+        "agent": agent_name,
+        "timestamp": time.time(),
+    })
 
     return {
-        "task_id":   task_id,
-        "score":     score,
+        "task_id": task_id,
+        "score": score,
         "breakdown": breakdown,
-        "steps":     step,
+        "steps": step,
         "root_cause_identified": env.state().root_cause_identified,
-        "incident_resolved":     env.state().incident_resolved,
+        "incident_resolved": env.state().incident_resolved,
     }
 
 
@@ -214,7 +343,7 @@ def run_heuristic_episode(task_id: str, verbose: bool = True) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="OpenEnv inference.py — heuristic agent for IncidentEnv"
+        description="OpenEnv inference.py — IncidentEnv agent"
     )
     parser.add_argument(
         "--task", default="task_easy",
@@ -227,30 +356,24 @@ def main() -> None:
     )
     parser.add_argument(
         "--json", action="store_true",
-        help="Output results as JSON",
+        help="Output results as JSON (in addition to structured logs)",
     )
     args = parser.parse_args()
 
-    tasks   = ["task_easy", "task_medium", "task_hard"] if args.all_tasks else [args.task]
-    verbose = not args.json
+    tasks = ["task_easy", "task_medium", "task_hard"] if args.all_tasks else [args.task]
     results = []
 
     for task_id in tasks:
         try:
-            result = run_heuristic_episode(task_id, verbose=verbose)
+            result = run_episode(task_id)
         except Exception as exc:
             result = {"task_id": task_id, "error": str(exc), "score": 0.0}
+            _log("END", {"task_id": task_id, "error": str(exc), "score": 0.0, "timestamp": time.time()})
         results.append(result)
 
     if args.json:
         avg = sum(r.get("score", 0.0) for r in results) / len(results)
         print(json.dumps({"results": results, "average_score": round(avg, 4)}, indent=2))
-    else:
-        scores = [r.get("score", 0.0) for r in results]
-        avg = sum(scores) / len(scores)
-        print(f"\n{'─'*60}")
-        print(f"  Average score across {len(tasks)} task(s): {avg:.3f}")
-        print(f"{'─'*60}")
 
 
 if __name__ == "__main__":
