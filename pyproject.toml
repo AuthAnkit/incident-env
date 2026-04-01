@@ -17,12 +17,6 @@ dependencies = [
     "httpx>=0.27.0",
 ]
 
-[tool.hatch.build.targets.wheel]
-packages = ["server", "baseline"]
-
-[tool.hatch.build.targets.wheel.force-include]
-"inference.py" = "inference.py"
-
 [project.scripts]
 server = "server.app:app"
 inference = "inference:main"

@@ -10,12 +10,13 @@ RUN pip install --no-cache-dir uv
 
 # Install deps first (layer-cached)
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev --no-install-project
 
 # Copy source
 COPY server/       ./server/
 COPY baseline/     ./baseline/
 COPY tests/        ./tests/
+COPY inference.py  .
 COPY openenv.yaml  .
 
 # Ownership
