@@ -4,6 +4,7 @@ FROM python:3.11-slim
 RUN groupadd -r appuser && useradd -r -g appuser appuser
 
 WORKDIR /app
+ENV PATH="/app/.venv/bin:$PATH"
 
 # Install uv (required for OpenEnv multi-mode)
 RUN pip install --no-cache-dir uv
