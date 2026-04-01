@@ -57,6 +57,8 @@ env = IncidentEnvironment()
 # ── OpenEnv core endpoints ────────────────────────────────────────────────────
 
 
+# ── OpenEnv core endpoints ────────────────────────────────────────────────────
+
 class ResetRequest(BaseModel):
     task_id: Optional[str] = "task_easy"
 
@@ -65,15 +67,16 @@ class ResetRequest(BaseModel):
     "/reset",
     response_model=Observation,
     summary="Reset the environment",
-    description="Start a new episode. Returns the initial Observation.",
+    description="Start a new episode. Accepts optional task_id.",
     tags=["OpenEnv Core"],
 )
-def reset(req: ResetRequest):
+def reset(req: Optional[ResetRequest] = None):
+    """OpenEnv validator often calls POST /reset with NO body → we must accept that."""
+    task_id = req.task_id if req is not None else "task_easy"
     try:
-        return env.reset(task_id=req.task_id or "task_easy")
+        return env.reset(task_id=task_id or "task_easy")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-
 
 @app.post(
     "/step",
