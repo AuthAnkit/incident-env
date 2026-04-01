@@ -24,10 +24,10 @@ from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from app.environment import IncidentEnvironment
-from app.graders import grade
-from app.models import Action, EnvironmentState, Observation, StepResult
-from app.scenarios import AVAILABLE_DIAGNOSTICS, AVAILABLE_FIXES, SCENARIOS
+from server.environment import IncidentEnvironment
+from server.graders import grade
+from server.models import Action, EnvironmentState, Observation, StepResult
+from server.scenarios import AVAILABLE_DIAGNOSTICS, AVAILABLE_FIXES, SCENARIOS
 
 # ── App setup ─────────────────────────────────────────────────────────────────
 
@@ -281,7 +281,7 @@ class GenerateRequest(BaseModel):
 
 @app.get("/dashboard", response_class=HTMLResponse, tags=["Extended"])
 def get_dashboard():
-    with open("app/frontend.html", "r", encoding="utf-8") as f:
+    with open("server/frontend.html", "r", encoding="utf-8") as f:
         return f.read()
 
 @app.post("/generate_scenario", tags=["Extended"])
@@ -291,7 +291,7 @@ async def generate_scenario(req: GenerateRequest):
         raise HTTPException(status_code=400, detail="OPENAI_API_KEY not set.")
     
     import uuid, copy
-    from app.scenarios import SCENARIOS
+    from server.scenarios import SCENARIOS
     from openai import AsyncOpenAI
     
     try:

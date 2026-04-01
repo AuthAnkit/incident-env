@@ -7,9 +7,9 @@ Or just:   pytest
 from __future__ import annotations
 
 import pytest
-from app.environment import IncidentEnvironment
-from app.graders import grade, score_postmortem
-from app.models import Action, EnvironmentState
+from server.environment import IncidentEnvironment
+from server.graders import grade, score_postmortem
+from server.models import Action, EnvironmentState
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
