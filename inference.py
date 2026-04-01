@@ -25,8 +25,8 @@ import os
 # ── Allow running from the repo root without installing the package ───────────
 sys.path.insert(0, os.path.dirname(__file__))
 
-from app.environment import IncidentEnvironment
-from app.models import Action
+from server.environment import IncidentEnvironment
+from server.models import Action
 
 
 # ── Heuristic agent (no API key needed) ──────────────────────────────────────

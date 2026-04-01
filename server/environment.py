@@ -15,13 +15,13 @@ import uuid
 from copy import deepcopy
 from typing import Any, Dict, List, Tuple
 
-from app.models import (
+from server.models import (
     Action, Alert, DeploymentRecord, EnvironmentState,
     IncidentHistoryEntry, LogEntry, Observation, RunbookHint,
     ServiceMetrics, StepResult,
 )
-from app.scenarios import AVAILABLE_DIAGNOSTICS, AVAILABLE_FIXES, SCENARIOS
-from app.graders import grade, score_postmortem
+from server.scenarios import AVAILABLE_DIAGNOSTICS, AVAILABLE_FIXES, SCENARIOS
+from server.graders import grade, score_postmortem
 
 
 # ── Reasoning quality helpers ─────────────────────────────────────────────────

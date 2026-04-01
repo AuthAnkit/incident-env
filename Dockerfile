@@ -3,20 +3,20 @@ FROM python:3.11-slim
 # Non-root user for security
 RUN groupadd -r appuser && useradd -r -g appuser appuser
 
-WORKDIR /app
+WORKDIR /server
 
 # Install deps first (layer-cached)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy source
-COPY app/       ./app/
+COPY server/       ./server/
 COPY baseline/  ./baseline/
 COPY tests/     ./tests/
 COPY openenv.yaml .
 
 # Ownership
-RUN chown -R appuser:appuser /app
+RUN chown -R appuser:appuser /server
 USER appuser
 
 # Health check

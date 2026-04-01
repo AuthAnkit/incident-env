@@ -9,7 +9,7 @@ Each grader:
 """
 from __future__ import annotations
 
-from app.models import EnvironmentState
+from server.models import EnvironmentState
 from typing import Tuple
 
 
