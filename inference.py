@@ -317,6 +317,8 @@ def run_episode(task_id: str) -> dict:
 
     # Final grade
     score, breakdown = env.grade_episode()
+    # Clamp score to strictly (0, 1) — OpenEnv requires this
+    score = round(max(0.01, min(0.99, score)), 4)
 
     _log("END", {
         "task_id": task_id,
@@ -346,13 +348,13 @@ def main() -> None:
         description="OpenEnv inference.py — IncidentEnv agent"
     )
     parser.add_argument(
-        "--task", default="task_easy",
+        "--task", default=None,
         choices=["task_easy", "task_medium", "task_hard"],
         help="Single task to run (default: task_easy)",
     )
     parser.add_argument(
-        "--all-tasks", action="store_true",
-        help="Run all three tasks",
+        "--all-tasks", action="store_true", default=True,
+        help="Run all three tasks (default: True)",
     )
     parser.add_argument(
         "--json", action="store_true",
@@ -360,15 +362,19 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    tasks = ["task_easy", "task_medium", "task_hard"] if args.all_tasks else [args.task]
+    # Default: run all 3 tasks (OpenEnv requires at least 3 tasks with graders)
+    if args.task:
+        tasks = [args.task]
+    else:
+        tasks = ["task_easy", "task_medium", "task_hard"]
     results = []
 
     for task_id in tasks:
         try:
             result = run_episode(task_id)
         except Exception as exc:
-            result = {"task_id": task_id, "error": str(exc), "score": 0.0}
-            _log("END", {"task_id": task_id, "error": str(exc), "score": 0.0, "timestamp": time.time()})
+            result = {"task_id": task_id, "error": str(exc), "score": 0.01}
+            _log("END", {"task_id": task_id, "error": str(exc), "score": 0.01, "timestamp": time.time()})
         results.append(result)
 
     if args.json:

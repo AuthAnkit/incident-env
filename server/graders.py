@@ -92,7 +92,7 @@ def grade_task_easy(state: EnvironmentState) -> Tuple[float, dict]:
     n_wrong = _wrong_count(state, wrongs)
     b["no_wrong_fixes"] = round(max(0.0, 0.20 - 0.07 * n_wrong), 3)
 
-    total = round(min(1.0, sum(b.values())), 3)
+    total = round(max(0.01, min(0.99, sum(b.values()))), 3)
     return total, b
 
 
@@ -133,7 +133,7 @@ def grade_task_medium(state: EnvironmentState) -> Tuple[float, dict]:
     # 5 pts — didn't escalate when not necessary
     b["no_premature_escalation"] = 0.0 if state.escalated else 0.05
 
-    total = round(min(1.0, sum(b.values())), 3)
+    total = round(max(0.01, min(0.99, sum(b.values()))), 3)
     return total, b
 
 
@@ -178,7 +178,7 @@ def grade_task_hard(state: EnvironmentState) -> Tuple[float, dict]:
     # 5 pts — incident resolved
     b["incident_resolved"] = 0.05 if state.incident_resolved else 0.0
 
-    total = round(min(1.0, sum(b.values())), 3)
+    total = round(max(0.01, min(0.99, sum(b.values()))), 3)
     return total, b
 
 
